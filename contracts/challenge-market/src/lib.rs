@@ -1,0 +1,418 @@
+//! XLMarket — challenge-market contract
+//!
+//! A pari-mutuel style prediction market where the "outcome" is real Stellar
+//! network data (ledger close time, tx counts, fee spikes, etc.) rather than
+//! game logic made up for the app.
+//!
+//! Design notes (read this before extending):
+//!
+//! - Two resolution paths are supported on purpose:
+//!     1. `resolve_native`  — fully trustless. Used for anything the Soroban
+//!        host environment already exposes (ledger sequence / timestamp).
+//!        No oracle, no trusted party, anyone can call it once the target
+//!        ledger has closed.
+//!     2. `resolve_via_oracle` — used for metrics that live in Horizon but
+//!        are NOT exposed to the contract host (tx counts, fee stats,
+//!        anything aggregated across ledgers). Restricted to a single
+//!        trusted relayer address for the MVP. The interface is written so
+//!        a quorum-of-relayers scheme can replace the single address later
+//!        without touching the pool/staking logic below.
+//! - Pool logic (stake / claim) is intentionally separate from resolution,
+//!   so it's easy to audit and easy to swap resolution mechanisms later.
+//! - Payout is pro-rata parimutuel: winners split the *losing* pool
+//!   proportional to their stake in the winning pool, plus get their own
+//!   stake back. No AMM, no share tokens — deliberately simple for v1.
+
+#![no_std]
+
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
+    String,
+};
+
+// ---------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------
+
+/// What kind of network condition this challenge resolves against.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Condition {
+    /// Resolves natively. YES wins if the ledger at `resolve_ledger_seq`
+    /// closed within the given number of seconds of the challenge's
+    /// creation timestamp. No oracle required.
+    LedgerCloseUnder(u32),
+
+    /// Resolves via oracle. YES wins if the tx count observed by the
+    /// relayer over the challenge window is >= the given threshold.
+    TxCountAtLeast(u32),
+
+    /// Resolves via oracle. YES wins if the relayer observes a base fee
+    /// spike >= the given threshold, in stroops.
+    BaseFeeAtLeast(i128),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Challenge {
+    pub id: u64,
+    pub creator: Address,
+    pub description: String,
+    pub condition: Condition,
+    /// Ledger sequence at/after which this challenge can be resolved.
+    pub resolve_ledger_seq: u32,
+    /// Ledger timestamp (unix seconds) at creation — used by
+    /// LedgerCloseUnder for the native resolution path.
+    pub created_timestamp: u64,
+    /// Deadline (ledger sequence) after which no new stakes are accepted.
+    pub staking_deadline_seq: u32,
+    pub token: Address,
+    pub pool_yes: i128,
+    pub pool_no: i128,
+    pub resolved: bool,
+    /// Only meaningful once `resolved == true`.
+    pub outcome_yes: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Stake {
+    pub side_yes: bool,
+    pub amount: i128,
+    pub claimed: bool,
+}
+
+#[contracttype]
+pub enum DataKey {
+    Admin,
+    OracleRelayer,
+    NextChallengeId,
+    Challenge(u64),
+    Stake(u64, Address),
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum Error {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    NotAuthorized = 3,
+    ChallengeNotFound = 4,
+    StakingClosed = 5,
+    TooEarlyToResolve = 6,
+    AlreadyResolved = 7,
+    NotResolved = 8,
+    NoStake = 9,
+    AlreadyClaimed = 10,
+    NothingWon = 11,
+    InvalidAmount = 12,
+    WrongConditionForResolutionPath = 13,
+}
+
+// ---------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------
+
+// Event topics are short symbols kept next to the calls that publish them
+// (see `symbol_short!` usage below) rather than defined here, to keep this
+// section from drifting out of sync with what's actually emitted.
+
+// ---------------------------------------------------------------------
+// Contract
+// ---------------------------------------------------------------------
+
+#[contract]
+pub struct ChallengeMarket;
+
+#[contractimpl]
+impl ChallengeMarket {
+    /// One-time setup. `oracle_relayer` is the address trusted to submit
+    /// Horizon-derived resolution data for oracle-path challenges.
+    pub fn initialize(env: Env, admin: Address, oracle_relayer: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::AlreadyInitialized);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleRelayer, &oracle_relayer);
+        env.storage().instance().set(&DataKey::NextChallengeId, &0u64);
+        Ok(())
+    }
+
+    /// Admin-only: rotate the trusted relayer address. Kept separate so a
+    /// future quorum implementation can replace this with a multi-address
+    /// registry without changing anything else.
+    pub fn set_oracle_relayer(env: Env, new_relayer: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleRelayer, &new_relayer);
+        Ok(())
+    }
+
+    /// Create a new challenge. Anyone can create one — this is the
+    /// "I bet the next ledger closes in under 6 seconds" entry point.
+    pub fn create_challenge(
+        env: Env,
+        creator: Address,
+        description: String,
+        condition: Condition,
+        resolve_ledger_seq: u32,
+        staking_deadline_seq: u32,
+        token: Address,
+    ) -> Result<u64, Error> {
+        creator.require_auth();
+
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextChallengeId)
+            .unwrap_or(0);
+
+        let challenge = Challenge {
+            id,
+            creator: creator.clone(),
+            description,
+            condition,
+            resolve_ledger_seq,
+            created_timestamp: env.ledger().timestamp(),
+            staking_deadline_seq,
+            token,
+            pool_yes: 0,
+            pool_no: 0,
+            resolved: false,
+            outcome_yes: false,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Challenge(id), &challenge);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextChallengeId, &(id + 1));
+
+        env.events()
+            .publish((symbol_short!("created"), id), creator);
+
+        Ok(id)
+    }
+
+    /// Stake `amount` of the challenge's token on YES or NO. Transfers the
+    /// token from `who` into the contract immediately (escrow model).
+    pub fn stake(
+        env: Env,
+        who: Address,
+        challenge_id: u64,
+        side_yes: bool,
+        amount: i128,
+    ) -> Result<(), Error> {
+        who.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let mut challenge: Challenge = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Challenge(challenge_id))
+            .ok_or(Error::ChallengeNotFound)?;
+
+        if challenge.resolved {
+            return Err(Error::AlreadyResolved);
+        }
+        if env.ledger().sequence() > challenge.staking_deadline_seq {
+            return Err(Error::StakingClosed);
+        }
+
+        // Escrow the stake.
+        let token_client = token::Client::new(&env, &challenge.token);
+        token_client.transfer(&who, &env.current_contract_address(), &amount);
+
+        // Merge with any existing stake this user has on this challenge.
+        let key = DataKey::Stake(challenge_id, who.clone());
+        let mut stake_rec: Stake = env.storage().persistent().get(&key).unwrap_or(Stake {
+            side_yes,
+            amount: 0,
+            claimed: false,
+        });
+        // Keep it simple for v1: don't allow straddling both sides.
+        stake_rec.side_yes = side_yes;
+        stake_rec.amount += amount;
+        env.storage().persistent().set(&key, &stake_rec);
+
+        if side_yes {
+            challenge.pool_yes += amount;
+        } else {
+            challenge.pool_no += amount;
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Challenge(challenge_id), &challenge);
+
+        env.events()
+            .publish((symbol_short!("staked"), challenge_id), (who, side_yes, amount));
+
+        Ok(())
+    }
+
+    /// Trustless resolution path for `LedgerCloseUnder` challenges. Anyone
+    /// can call this once `resolve_ledger_seq` has been reached — no
+    /// oracle, no admin, just the ledger's own timestamp.
+    pub fn resolve_native(env: Env, challenge_id: u64) -> Result<(), Error> {
+        let mut challenge: Challenge = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Challenge(challenge_id))
+            .ok_or(Error::ChallengeNotFound)?;
+
+        if challenge.resolved {
+            return Err(Error::AlreadyResolved);
+        }
+        if env.ledger().sequence() < challenge.resolve_ledger_seq {
+            return Err(Error::TooEarlyToResolve);
+        }
+
+        let max_close_seconds = match challenge.condition {
+            Condition::LedgerCloseUnder(secs) => secs,
+            _ => return Err(Error::WrongConditionForResolutionPath),
+        };
+
+        let elapsed = env.ledger().timestamp().saturating_sub(challenge.created_timestamp);
+        let outcome_yes = elapsed <= max_close_seconds as u64;
+
+        challenge.resolved = true;
+        challenge.outcome_yes = outcome_yes;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Challenge(challenge_id), &challenge);
+
+        env.events()
+            .publish((symbol_short!("resolved"), challenge_id), outcome_yes);
+
+        Ok(())
+    }
+
+    /// Oracle resolution path for Horizon-derived metrics (tx counts, fee
+    /// spikes) that the contract host cannot see on its own. Restricted to
+    /// the configured relayer address.
+    pub fn resolve_via_oracle(
+        env: Env,
+        challenge_id: u64,
+        outcome_yes: bool,
+    ) -> Result<(), Error> {
+        let relayer: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRelayer)
+            .ok_or(Error::NotInitialized)?;
+        relayer.require_auth();
+
+        let mut challenge: Challenge = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Challenge(challenge_id))
+            .ok_or(Error::ChallengeNotFound)?;
+
+        if challenge.resolved {
+            return Err(Error::AlreadyResolved);
+        }
+        if env.ledger().sequence() < challenge.resolve_ledger_seq {
+            return Err(Error::TooEarlyToResolve);
+        }
+        if let Condition::LedgerCloseUnder(_) = challenge.condition {
+            return Err(Error::WrongConditionForResolutionPath);
+        }
+
+        challenge.resolved = true;
+        challenge.outcome_yes = outcome_yes;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Challenge(challenge_id), &challenge);
+
+        env.events()
+            .publish((symbol_short!("resolved"), challenge_id), outcome_yes);
+
+        Ok(())
+    }
+
+    /// Claim pro-rata winnings. Winner's payout = their stake back, plus
+    /// their share of the losing pool proportional to their share of the
+    /// winning pool.
+    pub fn claim(env: Env, who: Address, challenge_id: u64) -> Result<i128, Error> {
+        who.require_auth();
+
+        let challenge: Challenge = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Challenge(challenge_id))
+            .ok_or(Error::ChallengeNotFound)?;
+
+        if !challenge.resolved {
+            return Err(Error::NotResolved);
+        }
+
+        let key = DataKey::Stake(challenge_id, who.clone());
+        let mut stake_rec: Stake = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::NoStake)?;
+
+        if stake_rec.claimed {
+            return Err(Error::AlreadyClaimed);
+        }
+        if stake_rec.side_yes != challenge.outcome_yes {
+            return Err(Error::NothingWon);
+        }
+
+        let (winning_pool, losing_pool) = if challenge.outcome_yes {
+            (challenge.pool_yes, challenge.pool_no)
+        } else {
+            (challenge.pool_no, challenge.pool_yes)
+        };
+
+        // payout = stake + stake * losing_pool / winning_pool
+        let bonus = if winning_pool > 0 {
+            (stake_rec.amount * losing_pool) / winning_pool
+        } else {
+            0
+        };
+        let payout = stake_rec.amount + bonus;
+
+        stake_rec.claimed = true;
+        env.storage().persistent().set(&key, &stake_rec);
+
+        let token_client = token::Client::new(&env, &challenge.token);
+        token_client.transfer(&env.current_contract_address(), &who, &payout);
+
+        env.events()
+            .publish((symbol_short!("claimed"), challenge_id), (who, payout));
+
+        Ok(payout)
+    }
+
+    // -------------------------------------------------------------
+    // Read-only helpers for the frontend
+    // -------------------------------------------------------------
+
+    pub fn get_challenge(env: Env, challenge_id: u64) -> Result<Challenge, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Challenge(challenge_id))
+            .ok_or(Error::ChallengeNotFound)
+    }
+
+    pub fn get_stake(env: Env, challenge_id: u64, who: Address) -> Option<Stake> {
+        env.storage().persistent().get(&DataKey::Stake(challenge_id, who))
+    }
+}
+
+mod test;
