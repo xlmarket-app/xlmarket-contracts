@@ -26,9 +26,19 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    String,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+    Symbol,
 };
+
+// ---------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------
+
+const EVENT_CREATED: Symbol = symbol_short!("created");
+const EVENT_STAKED: Symbol = symbol_short!("staked");
+const EVENT_RESOLVED: Symbol = symbol_short!("resolved");
+const EVENT_CLAIMED: Symbol = symbol_short!("claimed");
+const EVENT_CANCELLED: Symbol = symbol_short!("cancelled");
 
 // ---------------------------------------------------------------------
 // Types
@@ -94,19 +104,40 @@ pub enum DataKey {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Error {
+    /// Contract already initialized
     AlreadyInitialized = 1,
+    /// Contract not initialized yet
     NotInitialized = 2,
+    /// Caller not authorized
     NotAuthorized = 3,
+    /// Challenge not found
     ChallengeNotFound = 4,
+    /// Staking period is closed
     StakingClosed = 5,
+    /// Too early to resolve challenge
     TooEarlyToResolve = 6,
+    /// Challenge already resolved
     AlreadyResolved = 7,
+    /// Challenge not resolved yet
     NotResolved = 8,
+    /// No stake found for user
     NoStake = 9,
+    /// Stake already claimed
     AlreadyClaimed = 10,
+    /// User didn't win anything
     NothingWon = 11,
+    /// Invalid amount (must be >0)
     InvalidAmount = 12,
+    /// Wrong resolution path for this condition type
     WrongConditionForResolutionPath = 13,
+    /// Invalid ledger sequence order
+    InvalidLedgerSequence = 14,
+    /// Amount below minimum stake
+    AmountBelowMinimum = 15,
+    /// Challenge already cancelled
+    AlreadyCancelled = 16,
+    /// Challenge cannot be cancelled
+    CannotCancel = 17,
 }
 
 // ---------------------------------------------------------------------
@@ -137,7 +168,9 @@ impl ChallengeMarket {
         env.storage()
             .instance()
             .set(&DataKey::OracleRelayer, &oracle_relayer);
-        env.storage().instance().set(&DataKey::NextChallengeId, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextChallengeId, &0u64);
         Ok(())
     }
 
@@ -257,8 +290,10 @@ impl ChallengeMarket {
             .persistent()
             .set(&DataKey::Challenge(challenge_id), &challenge);
 
-        env.events()
-            .publish((symbol_short!("staked"), challenge_id), (who, side_yes, amount));
+        env.events().publish(
+            (symbol_short!("staked"), challenge_id),
+            (who, side_yes, amount),
+        );
 
         Ok(())
     }
@@ -285,7 +320,10 @@ impl ChallengeMarket {
             _ => return Err(Error::WrongConditionForResolutionPath),
         };
 
-        let elapsed = env.ledger().timestamp().saturating_sub(challenge.created_timestamp);
+        let elapsed = env
+            .ledger()
+            .timestamp()
+            .saturating_sub(challenge.created_timestamp);
         let outcome_yes = elapsed <= max_close_seconds as u64;
 
         challenge.resolved = true;
@@ -303,11 +341,7 @@ impl ChallengeMarket {
     /// Oracle resolution path for Horizon-derived metrics (tx counts, fee
     /// spikes) that the contract host cannot see on its own. Restricted to
     /// the configured relayer address.
-    pub fn resolve_via_oracle(
-        env: Env,
-        challenge_id: u64,
-        outcome_yes: bool,
-    ) -> Result<(), Error> {
+    pub fn resolve_via_oracle(env: Env, challenge_id: u64, outcome_yes: bool) -> Result<(), Error> {
         let relayer: Address = env
             .storage()
             .instance()
@@ -360,11 +394,7 @@ impl ChallengeMarket {
         }
 
         let key = DataKey::Stake(challenge_id, who.clone());
-        let mut stake_rec: Stake = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NoStake)?;
+        let mut stake_rec: Stake = env.storage().persistent().get(&key).ok_or(Error::NoStake)?;
 
         if stake_rec.claimed {
             return Err(Error::AlreadyClaimed);
@@ -411,7 +441,9 @@ impl ChallengeMarket {
     }
 
     pub fn get_stake(env: Env, challenge_id: u64, who: Address) -> Option<Stake> {
-        env.storage().persistent().get(&DataKey::Stake(challenge_id, who))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Stake(challenge_id, who))
     }
 }
 
