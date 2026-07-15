@@ -97,8 +97,39 @@ pub enum DataKey {
     Admin,
     OracleRelayer,
     NextChallengeId,
+    ProtocolFeeBps,
     Challenge(u64),
     Stake(u64, Address),
+}
+
+// ---------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------
+
+// Event topics defined as constants above.
+
+// ---------------------------------------------------------------------
+// Helper Functions
+// ---------------------------------------------------------------------
+
+fn bump_challenge(env: &Env, id: u64) {
+    env.storage()
+        .persistent()
+        .extend_ttl(&DataKey::Challenge(id), 100000, 100000);
+}
+
+fn bump_stake(env: &Env, id: u64, who: &Address) {
+    env.storage()
+        .persistent()
+        .extend_ttl(&DataKey::Stake(id, who.clone()), 100000, 100000);
+}
+
+fn get_pools(challenge: &Challenge) -> (i128, i128) {
+    if challenge.outcome_yes {
+        (challenge.pool_yes, challenge.pool_no)
+    } else {
+        (challenge.pool_no, challenge.pool_yes)
+    }
 }
 
 #[contracterror]
@@ -139,14 +170,6 @@ pub enum Error {
     /// Challenge cannot be cancelled
     CannotCancel = 17,
 }
-
-// ---------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------
-
-// Event topics are short symbols kept next to the calls that publish them
-// (see `symbol_short!` usage below) rather than defined here, to keep this
-// section from drifting out of sync with what's actually emitted.
 
 // ---------------------------------------------------------------------
 // Contract
