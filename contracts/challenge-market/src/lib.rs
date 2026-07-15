@@ -498,6 +498,34 @@ impl ChallengeMarket {
             .persistent()
             .get(&DataKey::Stake(challenge_id, who))
     }
+
+    pub fn get_next_challenge_id(env: Env) -> Result<u64, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::NextChallengeId)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_oracle_relayer(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRelayer)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_protocol_fee(env: Env) -> Result<u32, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ProtocolFeeBps)
+            .ok_or(Error::NotInitialized)
+    }
 }
 
 mod test;
