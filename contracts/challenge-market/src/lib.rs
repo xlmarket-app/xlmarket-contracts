@@ -194,6 +194,9 @@ impl ChallengeMarket {
         env.storage()
             .instance()
             .set(&DataKey::NextChallengeId, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProtocolFeeBps, &0u32);
         Ok(())
     }
 
@@ -210,6 +213,23 @@ impl ChallengeMarket {
         env.storage()
             .instance()
             .set(&DataKey::OracleRelayer, &new_relayer);
+        Ok(())
+    }
+
+    /// Admin-only: set protocol fee in basis points (0-10000)
+    pub fn set_protocol_fee(env: Env, fee_bps: u32) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        if fee_bps > 10000 {
+            return Err(Error::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ProtocolFeeBps, &fee_bps);
         Ok(())
     }
 
