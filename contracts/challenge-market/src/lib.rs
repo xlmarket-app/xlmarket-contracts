@@ -80,6 +80,7 @@ pub struct Challenge {
     pub pool_yes: i128,
     pub pool_no: i128,
     pub resolved: bool,
+    pub cancelled: bool,
     /// Only meaningful once `resolved == true`.
     pub outcome_yes: bool,
 }
@@ -246,6 +247,14 @@ impl ChallengeMarket {
     ) -> Result<u64, Error> {
         creator.require_auth();
 
+        let current_seq = env.ledger().sequence();
+        if staking_deadline_seq <= current_seq {
+            return Err(Error::InvalidLedgerSequence);
+        }
+        if resolve_ledger_seq <= staking_deadline_seq {
+            return Err(Error::InvalidLedgerSequence);
+        }
+
         let id: u64 = env
             .storage()
             .instance()
@@ -264,6 +273,7 @@ impl ChallengeMarket {
             pool_yes: 0,
             pool_no: 0,
             resolved: false,
+            cancelled: false,
             outcome_yes: false,
         };
 
