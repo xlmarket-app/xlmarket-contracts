@@ -320,6 +320,9 @@ impl ChallengeMarket {
         if env.ledger().sequence() > challenge.staking_deadline_seq {
             return Err(Error::StakingClosed);
         }
+        if amount < challenge.min_stake {
+            return Err(Error::AmountBelowMinimum);
+        }
 
         // Escrow the stake.
         let token_client = token::Client::new(&env, &challenge.token);
