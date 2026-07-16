@@ -476,6 +476,73 @@ impl ChallengeMarket {
         Ok(payout)
     }
 
+    /// Cancel an unresolved challenge (admin or creator only)
+    pub fn cancel_challenge(env: Env, caller: Address, challenge_id: u64) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut challenge: Challenge = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Challenge(challenge_id))
+            .ok_or(Error::ChallengeNotFound)?;
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        if caller != admin && caller != challenge.creator {
+            return Err(Error::NotAuthorized);
+        }
+        if challenge.resolved || challenge.cancelled {
+            return Err(Error::AlreadyCancelled);
+        }
+
+        challenge.cancelled = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Challenge(challenge_id), &challenge);
+
+        env.events()
+            .publish((EVENT_CANCELLED, challenge_id), caller);
+
+        Ok(())
+    }
+
+    /// Refund stake for a cancelled challenge
+    pub fn refund(env: Env, who: Address, challenge_id: u64) -> Result<i128, Error> {
+        who.require_auth();
+
+        let challenge: Challenge = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Challenge(challenge_id))
+            .ok_or(Error::ChallengeNotFound)?;
+
+        if !challenge.cancelled {
+            return Err(Error::CannotCancel);
+        }
+
+        let key = DataKey::Stake(challenge_id, who.clone());
+        let mut stake_rec: Stake = env.storage().persistent().get(&key).ok_or(Error::NoStake)?;
+
+        if stake_rec.claimed {
+            return Err(Error::AlreadyClaimed);
+        }
+
+        stake_rec.claimed = true;
+        env.storage().persistent().set(&key, &stake_rec);
+
+        let token_client = token::Client::new(&env, &challenge.token);
+        token_client.transfer(&env.current_contract_address(), &who, stake_rec.amount);
+
+        env.events()
+            .publish((EVENT_REFUNDED, challenge_id), (who, stake_rec.amount));
+
+        Ok(stake_rec.amount)
+    }
+
     // -------------------------------------------------------------
     // Read-only helpers for the frontend
     // -------------------------------------------------------------
