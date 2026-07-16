@@ -39,6 +39,7 @@ const EVENT_STAKED: Symbol = symbol_short!("staked");
 const EVENT_RESOLVED: Symbol = symbol_short!("resolved");
 const EVENT_CLAIMED: Symbol = symbol_short!("claimed");
 const EVENT_CANCELLED: Symbol = symbol_short!("cancelled");
+const EVENT_REFUNDED: Symbol = symbol_short!("refunded");
 
 // ---------------------------------------------------------------------
 // Types
