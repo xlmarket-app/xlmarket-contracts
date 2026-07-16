@@ -172,6 +172,8 @@ pub enum Error {
     AlreadyCancelled = 16,
     /// Challenge cannot be cancelled
     CannotCancel = 17,
+    /// Cannot switch sides once staked
+    CannotSwitchSide = 18,
 }
 
 // ---------------------------------------------------------------------
@@ -336,6 +338,9 @@ impl ChallengeMarket {
             claimed: false,
         });
         // Keep it simple for v1: don't allow straddling both sides.
+        if stake_rec.amount > 0 && stake_rec.side_yes != side_yes {
+            return Err(Error::CannotSwitchSide);
+        }
         stake_rec.side_yes = side_yes;
         stake_rec.amount += amount;
         env.storage().persistent().set(&key, &stake_rec);
