@@ -453,11 +453,7 @@ impl ChallengeMarket {
             return Err(Error::NothingWon);
         }
 
-        let (winning_pool, losing_pool) = if challenge.outcome_yes {
-            (challenge.pool_yes, challenge.pool_no)
-        } else {
-            (challenge.pool_no, challenge.pool_yes)
-        };
+        let (winning_pool, losing_pool) = get_pools(&challenge);
 
         // payout = stake + stake * losing_pool / winning_pool
         let bonus = if winning_pool > 0 {
