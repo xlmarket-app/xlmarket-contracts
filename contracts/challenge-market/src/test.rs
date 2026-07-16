@@ -4,7 +4,10 @@ use super::*;
 use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{token, Env};
 
-fn create_token<'a>(env: &Env, admin: &Address) -> (Address, token::StellarAssetClient<'a>, token::Client<'a>) {
+fn create_token<'a>(
+    env: &Env,
+    admin: &Address,
+) -> (Address, token::StellarAssetClient<'a>, token::Client<'a>) {
     let sac = env.register_stellar_asset_contract_v2(admin.clone());
     let address = sac.address();
     let admin_client = token::StellarAssetClient::new(env, &address);
@@ -99,6 +102,7 @@ fn test_ledger_close_over_threshold_no_wins() {
         &201,
         &205,
         &token_addr,
+        &0,
     );
 
     client.stake(&alice, &id, &true, &100);
@@ -188,6 +192,7 @@ fn test_staking_closed_after_deadline() {
         &402,
         &401,
         &token_addr,
+        &0,
     );
 
     // Advance past staking deadline
@@ -227,6 +232,7 @@ fn test_cancel_challenge_by_creator() {
         &502,
         &501,
         &token_addr,
+        &0,
     );
 
     client.stake(&bob, &id, &true, &100);
@@ -272,6 +278,7 @@ fn test_cancel_challenge_by_admin() {
         &602,
         &601,
         &token_addr,
+        &0,
     );
 
     client.stake(&bob, &id, &true, &100);
@@ -316,6 +323,7 @@ fn test_protocol_fee_deduction() {
         &701,
         &705,
         &token_addr,
+        &0,
     );
 
     client.stake(&alice, &id, &true, &100);
