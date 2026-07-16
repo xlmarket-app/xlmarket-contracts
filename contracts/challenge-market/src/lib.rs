@@ -476,7 +476,15 @@ impl ChallengeMarket {
         } else {
             0
         };
-        let payout = stake_rec.amount + bonus;
+        let gross_payout = stake_rec.amount + bonus;
+
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProtocolFeeBps)
+            .unwrap_or(0);
+        let fee = (gross_payout * fee_bps as i128) / 10000;
+        let payout = gross_payout - fee;
 
         stake_rec.claimed = true;
         env.storage().persistent().set(&key, &stake_rec);
