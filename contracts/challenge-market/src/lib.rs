@@ -84,6 +84,7 @@ pub struct Challenge {
     pub cancelled: bool,
     /// Only meaningful once `resolved == true`.
     pub outcome_yes: bool,
+    pub min_stake: i128,
 }
 
 #[contracttype]
@@ -245,6 +246,7 @@ impl ChallengeMarket {
         resolve_ledger_seq: u32,
         staking_deadline_seq: u32,
         token: Address,
+        min_stake: i128,
     ) -> Result<u64, Error> {
         creator.require_auth();
 
@@ -276,6 +278,7 @@ impl ChallengeMarket {
             resolved: false,
             cancelled: false,
             outcome_yes: false,
+            min_stake,
         };
 
         env.storage()
