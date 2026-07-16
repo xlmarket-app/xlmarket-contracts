@@ -286,6 +286,7 @@ impl ChallengeMarket {
         env.storage()
             .persistent()
             .set(&DataKey::Challenge(id), &challenge);
+        bump_challenge(&env, id);
         env.storage()
             .instance()
             .set(&DataKey::NextChallengeId, &(id + 1));
@@ -315,6 +316,7 @@ impl ChallengeMarket {
             .persistent()
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
+        bump_challenge(&env, challenge_id);
 
         if challenge.resolved || challenge.cancelled {
             return Err(Error::AlreadyResolved);
@@ -344,6 +346,7 @@ impl ChallengeMarket {
         stake_rec.side_yes = side_yes;
         stake_rec.amount += amount;
         env.storage().persistent().set(&key, &stake_rec);
+        bump_stake(&env, challenge_id, &who);
 
         if side_yes {
             challenge.pool_yes += amount;
@@ -369,6 +372,7 @@ impl ChallengeMarket {
             .persistent()
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
+        bump_challenge(&env, challenge_id);
 
         if challenge.resolved || challenge.cancelled {
             return Err(Error::AlreadyResolved);
@@ -416,6 +420,7 @@ impl ChallengeMarket {
             .persistent()
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
+        bump_challenge(&env, challenge_id);
 
         if challenge.resolved || challenge.cancelled {
             return Err(Error::AlreadyResolved);
@@ -450,6 +455,7 @@ impl ChallengeMarket {
             .persistent()
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
+        bump_challenge(&env, challenge_id);
 
         if !challenge.resolved {
             return Err(Error::NotResolved);
@@ -460,6 +466,7 @@ impl ChallengeMarket {
 
         let key = DataKey::Stake(challenge_id, who.clone());
         let mut stake_rec: Stake = env.storage().persistent().get(&key).ok_or(Error::NoStake)?;
+        bump_stake(&env, challenge_id, &who);
 
         if stake_rec.claimed {
             return Err(Error::AlreadyClaimed);
@@ -507,6 +514,7 @@ impl ChallengeMarket {
             .persistent()
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
+        bump_challenge(&env, challenge_id);
 
         let admin: Address = env
             .storage()
@@ -541,6 +549,7 @@ impl ChallengeMarket {
             .persistent()
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
+        bump_challenge(&env, challenge_id);
 
         if !challenge.cancelled {
             return Err(Error::CannotCancel);
@@ -548,6 +557,7 @@ impl ChallengeMarket {
 
         let key = DataKey::Stake(challenge_id, who.clone());
         let mut stake_rec: Stake = env.storage().persistent().get(&key).ok_or(Error::NoStake)?;
+        bump_stake(&env, challenge_id, &who);
 
         if stake_rec.claimed {
             return Err(Error::AlreadyClaimed);
