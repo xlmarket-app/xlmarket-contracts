@@ -311,7 +311,7 @@ impl ChallengeMarket {
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
 
-        if challenge.resolved {
+        if challenge.resolved || challenge.cancelled {
             return Err(Error::AlreadyResolved);
         }
         if env.ledger().sequence() > challenge.staking_deadline_seq {
@@ -359,7 +359,7 @@ impl ChallengeMarket {
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
 
-        if challenge.resolved {
+        if challenge.resolved || challenge.cancelled {
             return Err(Error::AlreadyResolved);
         }
         if env.ledger().sequence() < challenge.resolve_ledger_seq {
@@ -406,7 +406,7 @@ impl ChallengeMarket {
             .get(&DataKey::Challenge(challenge_id))
             .ok_or(Error::ChallengeNotFound)?;
 
-        if challenge.resolved {
+        if challenge.resolved || challenge.cancelled {
             return Err(Error::AlreadyResolved);
         }
         if env.ledger().sequence() < challenge.resolve_ledger_seq {
@@ -442,6 +442,9 @@ impl ChallengeMarket {
 
         if !challenge.resolved {
             return Err(Error::NotResolved);
+        }
+        if challenge.cancelled {
+            return Err(Error::AlreadyCancelled);
         }
 
         let key = DataKey::Stake(challenge_id, who.clone());
