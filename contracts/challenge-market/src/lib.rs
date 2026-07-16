@@ -284,8 +284,7 @@ impl ChallengeMarket {
             .instance()
             .set(&DataKey::NextChallengeId, &(id + 1));
 
-        env.events()
-            .publish((symbol_short!("created"), id), creator);
+        env.events().publish((EVENT_CREATED, id), creator);
 
         Ok(id)
     }
@@ -343,10 +342,8 @@ impl ChallengeMarket {
             .persistent()
             .set(&DataKey::Challenge(challenge_id), &challenge);
 
-        env.events().publish(
-            (symbol_short!("staked"), challenge_id),
-            (who, side_yes, amount),
-        );
+        env.events()
+            .publish((EVENT_STAKED, challenge_id), (who, side_yes, amount));
 
         Ok(())
     }
@@ -386,7 +383,7 @@ impl ChallengeMarket {
             .set(&DataKey::Challenge(challenge_id), &challenge);
 
         env.events()
-            .publish((symbol_short!("resolved"), challenge_id), outcome_yes);
+            .publish((EVENT_RESOLVED, challenge_id), outcome_yes);
 
         Ok(())
     }
@@ -425,7 +422,7 @@ impl ChallengeMarket {
             .set(&DataKey::Challenge(challenge_id), &challenge);
 
         env.events()
-            .publish((symbol_short!("resolved"), challenge_id), outcome_yes);
+            .publish((EVENT_RESOLVED, challenge_id), outcome_yes);
 
         Ok(())
     }
@@ -477,7 +474,7 @@ impl ChallengeMarket {
         token_client.transfer(&env.current_contract_address(), &who, &payout);
 
         env.events()
-            .publish((symbol_short!("claimed"), challenge_id), (who, payout));
+            .publish((EVENT_CLAIMED, challenge_id), (who, payout));
 
         Ok(payout)
     }
