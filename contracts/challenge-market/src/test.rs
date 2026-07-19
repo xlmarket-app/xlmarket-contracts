@@ -42,18 +42,19 @@ fn test_ledger_close_under_happy_path() {
         &alice,
         &String::from_str(&env, "Next ledger closes under 6s"),
         &Condition::LedgerCloseUnder(6),
-        &101, // resolve_ledger_seq
-        &105, // staking_deadline_seq
+        &105, // resolve_ledger_seq
+        &101, // staking_deadline_seq
         &token_addr,
+        &String::from_str(&env, "timing"),
     );
 
     client.stake(&alice, &id, &true, &100);
     client.stake(&bob, &id, &false, &50);
 
-    // Advance ledger: 4 seconds later, next sequence closed.
+    // Advance ledger: 4 seconds later, at resolve sequence.
     env.ledger().with_mut(|l| {
         l.timestamp = 1_004;
-        l.sequence_number = 101;
+        l.sequence_number = 105;
     });
 
     client.resolve_native(&id);
@@ -99,10 +100,10 @@ fn test_ledger_close_over_threshold_no_wins() {
         &alice,
         &String::from_str(&env, "Next ledger closes under 6s"),
         &Condition::LedgerCloseUnder(6),
-        &201,
         &205,
+        &201,
         &token_addr,
-        &0,
+        &String::from_str(&env, "timing"),
     );
 
     client.stake(&alice, &id, &true, &100);
@@ -111,7 +112,7 @@ fn test_ledger_close_over_threshold_no_wins() {
     // 10 seconds later — slower than the 6s threshold, so NO wins.
     env.ledger().with_mut(|l| {
         l.timestamp = 2_010;
-        l.sequence_number = 201;
+        l.sequence_number = 205;
     });
 
     client.resolve_native(&id);
@@ -146,15 +147,16 @@ fn test_oracle_resolution_path() {
         &alice,
         &String::from_str(&env, "Tx count spikes above 5000 this window"),
         &Condition::TxCountAtLeast(5000),
-        &301,
         &305,
+        &301,
         &token_addr,
+        &String::from_str(&env, "volume"),
     );
 
     client.stake(&alice, &id, &true, &200);
 
     env.ledger().with_mut(|l| {
-        l.sequence_number = 301;
+        l.sequence_number = 305;
     });
 
     // Only the configured relayer can resolve this path.
@@ -192,7 +194,7 @@ fn test_staking_closed_after_deadline() {
         &402,
         &401,
         &token_addr,
-        &0,
+        &String::from_str(&env, "timing"),
     );
 
     // Advance past staking deadline
@@ -232,7 +234,7 @@ fn test_cancel_challenge_by_creator() {
         &502,
         &501,
         &token_addr,
-        &0,
+        &String::from_str(&env, "timing"),
     );
 
     client.stake(&bob, &id, &true, &100);
@@ -278,7 +280,7 @@ fn test_cancel_challenge_by_admin() {
         &602,
         &601,
         &token_addr,
-        &0,
+        &String::from_str(&env, "timing"),
     );
 
     client.stake(&bob, &id, &true, &100);
@@ -320,10 +322,10 @@ fn test_protocol_fee_deduction() {
         &alice,
         &String::from_str(&env, "Next ledger closes under 6s"),
         &Condition::LedgerCloseUnder(6),
-        &701,
         &705,
+        &701,
         &token_addr,
-        &0,
+        &String::from_str(&env, "timing"),
     );
 
     client.stake(&alice, &id, &true, &100);
@@ -331,7 +333,7 @@ fn test_protocol_fee_deduction() {
 
     env.ledger().with_mut(|l| {
         l.timestamp = 7_004;
-        l.sequence_number = 701;
+        l.sequence_number = 705;
     });
 
     client.resolve_native(&id);
