@@ -344,3 +344,97 @@ fn test_protocol_fee_deduction() {
     assert_eq!(token_client.balance(&alice), 1_000_000 - 100 + 135);
     assert_eq!(token_client.balance(&contract_id), 15); // fee kept in contract
 }
+
+#[test]
+fn test_straddle_both_sides() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let relayer = Address::generate(&env);
+    let alice = Address::generate(&env); // stakes on both sides!
+
+    let (token_addr, token_admin, token_client) = create_token(&env, &admin);
+    token_admin.mint(&alice, &1_000_000);
+
+    let contract_id = env.register(ChallengeMarket, ());
+    let client = ChallengeMarketClient::new(&env, &contract_id);
+    client.initialize(&admin, &relayer);
+
+    env.ledger().with_mut(|l| {
+        l.timestamp = 8_000;
+        l.sequence_number = 800;
+    });
+
+    let id = client.create_challenge(
+        &admin,
+        &String::from_str(&env, "Next ledger closes under 6s"),
+        &Condition::LedgerCloseUnder(6),
+        &805,
+        &801,
+        &token_addr,
+        &String::from_str(&env, "timing"),
+    );
+
+    // Stake 100 on YES
+    client.stake(&alice, &id, &true, &100);
+    // Then stake 50 on NO
+    client.stake(&alice, &id, &false, &50);
+
+    env.ledger().with_mut(|l| {
+        l.timestamp = 8_004;
+        l.sequence_number = 805;
+    });
+
+    client.resolve_native(&id); // outcome YES wins!
+
+    // Claim YES winnings
+    let payout = client.claim(&alice, &id);
+    assert_eq!(payout, 150); // 100 back + 50 from losing pool
+    assert_eq!(token_client.balance(&alice), 1_000_000 - 100 - 50 + 150);
+}
+
+#[test]
+fn test_cancel_and_refund_both_sides() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let relayer = Address::generate(&env);
+    let alice = Address::generate(&env); // stakes on both sides!
+
+    let (token_addr, token_admin, token_client) = create_token(&env, &admin);
+    token_admin.mint(&alice, &1_000_000);
+
+    let contract_id = env.register(ChallengeMarket, ());
+    let client = ChallengeMarketClient::new(&env, &contract_id);
+    client.initialize(&admin, &relayer);
+
+    env.ledger().with_mut(|l| {
+        l.timestamp = 9_000;
+        l.sequence_number = 900;
+    });
+
+    let id = client.create_challenge(
+        &admin,
+        &String::from_str(&env, "Next ledger closes under 6s"),
+        &Condition::LedgerCloseUnder(6),
+        &905,
+        &901,
+        &token_addr,
+        &String::from_str(&env, "timing"),
+    );
+
+    // Stake 100 on YES
+    client.stake(&alice, &id, &true, &100);
+    // Then stake 50 on NO
+    client.stake(&alice, &id, &false, &50);
+
+    // Cancel challenge as admin
+    client.cancel_challenge(&admin, &id);
+
+    // Refund both sides!
+    let refund = client.refund(&alice, &id);
+    assert_eq!(refund, 150); // 100 +50
+    assert_eq!(token_client.balance(&alice), 1_000_000 - 100 - 50 + 150);
+}
